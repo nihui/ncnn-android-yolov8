@@ -151,6 +151,8 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved)
 
     g_camera = new MyNdkCamera;
 
+    ncnn::create_gpu_instance();
+
     return JNI_VERSION_1_4;
 }
 
@@ -165,6 +167,8 @@ JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved)
         g_yolov8 = 0;
     }
 
+    ncnn::destroy_gpu_instance();
+
     delete g_camera;
     g_camera = 0;
 }
@@ -172,7 +176,7 @@ JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved)
 // public native boolean loadModel(AssetManager mgr, int taskid, int modelid, int cpugpu);
 JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIEnv* env, jobject thiz, jobject assetManager, jint taskid, jint modelid, jint cpugpu)
 {
-    if (taskid < 0 || taskid > 5 || modelid < 0 || modelid > 5 || cpugpu < 0 || cpugpu > 1)
+    if (taskid < 0 || taskid > 5 || modelid < 0 || modelid > 5 || cpugpu < 0 || cpugpu > 2)
     {
         return JNI_FALSE;
     }
@@ -204,26 +208,37 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
     std::string parampath = std::string("yolov8") + modeltypes[(int)modelid] + tasknames[(int)taskid] + ".ncnn.param";
     std::string modelpath = std::string("yolov8") + modeltypes[(int)modelid] + tasknames[(int)taskid] + ".ncnn.bin";
     bool use_gpu = (int)cpugpu == 1;
+    bool use_turnip = (int)cpugpu == 2;
 
     // reload
     {
         ncnn::MutexLockGuard g(lock);
 
-        if (use_gpu && ncnn::get_gpu_count() == 0)
-        {
-            // no gpu
-            delete g_yolov8;
-            g_yolov8 = 0;
-        }
-        else
         {
             static int old_taskid = 0;
-            if (taskid != old_taskid)
+            static int old_modelid = 0;
+            static int old_cpugpu = 0;
+            if (taskid != old_taskid || (modelid % 3) != old_modelid || cpugpu != old_cpugpu)
             {
-                // taskid changed
+                // taskid or model or cpugpu changed
                 delete g_yolov8;
                 g_yolov8 = 0;
             }
+            old_taskid = taskid;
+            old_modelid = modelid % 3;
+            old_cpugpu = cpugpu;
+
+            ncnn::destroy_gpu_instance();
+
+            if (use_turnip)
+            {
+                ncnn::create_gpu_instance("libvulkan_freedreno.so");
+            }
+            else if (use_gpu)
+            {
+                ncnn::create_gpu_instance();
+            }
+
             if (!g_yolov8)
             {
                 if (taskid == 0) g_yolov8 = new YOLOv8_det_coco;
@@ -232,8 +247,9 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
                 if (taskid == 3) g_yolov8 = new YOLOv8_pose;
                 if (taskid == 4) g_yolov8 = new YOLOv8_cls;
                 if (taskid == 5) g_yolov8 = new YOLOv8_obb;
+
+                g_yolov8->load(mgr, parampath.c_str(), modelpath.c_str(), use_gpu || use_turnip);
             }
-            g_yolov8->load(mgr, parampath.c_str(), modelpath.c_str(), use_gpu);
             g_yolov8->set_det_target_size((int)modelid >= 3 ? 640 : 320);
         }
     }
