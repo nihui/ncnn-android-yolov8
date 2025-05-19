@@ -15,7 +15,7 @@
 #include <android/asset_manager_jni.h>
 #include <android/native_window_jni.h>
 #include <android/native_window.h>
-
+#include <android/bitmap.h> // For Bitmap operations
 #include <android/log.h>
 
 #include <jni.h>
@@ -48,7 +48,7 @@ static int draw_unsupported(cv::Mat& rgb)
     int x = (rgb.cols - label_size.width) / 2;
 
     cv::rectangle(rgb, cv::Rect(cv::Point(x, y), cv::Size(label_size.width, label_size.height + baseLine)),
-                    cv::Scalar(255, 255, 255), -1);
+                  cv::Scalar(255, 255, 255), -1);
 
     cv::putText(rgb, text, cv::Point(x, y + label_size.height),
                 cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 0));
@@ -102,7 +102,7 @@ static int draw_fps(cv::Mat& rgb)
     int x = rgb.cols - label_size.width;
 
     cv::rectangle(rgb, cv::Rect(cv::Point(x, y), cv::Size(label_size.width, label_size.height + baseLine)),
-                    cv::Scalar(255, 255, 255), -1);
+                  cv::Scalar(255, 255, 255), -1);
 
     cv::putText(rgb, text, cv::Point(x, y + label_size.height),
                 cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
@@ -112,6 +112,11 @@ static int draw_fps(cv::Mat& rgb)
 
 static YOLOv8* g_yolov8 = 0;
 static ncnn::Mutex lock;
+
+// For getCurrentFrame
+static cv::Mat g_latest_frame_for_bitmap;
+static ncnn::Mutex g_latest_frame_lock;
+
 
 class MyNdkCamera : public NdkCameraWindow
 {
@@ -123,13 +128,12 @@ void MyNdkCamera::on_image_render(cv::Mat& rgb) const
 {
     // yolov8
     {
-        ncnn::MutexLockGuard g(lock);
+        ncnn::MutexLockGuard g(lock); // This lock is for g_yolov8
 
         if (g_yolov8)
         {
             std::vector<Object> objects;
             g_yolov8->detect(rgb, objects);
-
             g_yolov8->draw(rgb, objects);
         }
         else
@@ -139,9 +143,106 @@ void MyNdkCamera::on_image_render(cv::Mat& rgb) const
     }
 
     draw_fps(rgb);
+
+    // Store the latest frame for bitmap retrieval
+    {
+        ncnn::MutexLockGuard lock(g_latest_frame_lock);
+        g_latest_frame_for_bitmap = rgb.clone(); // Make a deep copy
+    }
 }
 
 static MyNdkCamera* g_camera = 0;
+
+// Helper function to convert cv::Mat (RGB or RGBA) to Android Bitmap
+jobject matToBitmap(JNIEnv* env, const cv::Mat& src) {
+    if (src.empty()) {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "matToBitmap: Input Mat is empty");
+        return nullptr;
+    }
+
+    // Get Bitmap class and createBitmap method ID
+    jclass bitmapCls = env->FindClass("android/graphics/Bitmap");
+    if (!bitmapCls) {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "Failed to find Bitmap class");
+        return nullptr;
+    }
+    jmethodID createBitmapMethod = env->GetStaticMethodID(bitmapCls, "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+    if (!createBitmapMethod) {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "Failed to find createBitmap static method");
+        env->DeleteLocalRef(bitmapCls);
+        return nullptr;
+    }
+
+    // Get Bitmap.Config.ARGB_8888
+    jclass bitmapConfigCls = env->FindClass("android/graphics/Bitmap$Config");
+    if (!bitmapConfigCls) {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "Failed to find Bitmap.Config class");
+        env->DeleteLocalRef(bitmapCls);
+        return nullptr;
+    }
+    jfieldID argb8888Field = env->GetStaticFieldID(bitmapConfigCls, "ARGB_8888", "Landroid/graphics/Bitmap$Config;");
+    if (!argb8888Field) {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "Failed to find ARGB_8888 field");
+        env->DeleteLocalRef(bitmapCls);
+        env->DeleteLocalRef(bitmapConfigCls);
+        return nullptr;
+    }
+    jobject argb8888Config = env->GetStaticObjectField(bitmapConfigCls, argb8888Field);
+
+    // Create the Java Bitmap object
+    jobject javaBitmap = env->CallStaticObjectMethod(bitmapCls, createBitmapMethod, src.cols, src.rows, argb8888Config);
+    if (!javaBitmap) {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "Failed to create Java Bitmap object");
+        env->DeleteLocalRef(bitmapCls);
+        env->DeleteLocalRef(bitmapConfigCls);
+        env->DeleteLocalRef(argb8888Config);
+        return nullptr;
+    }
+
+    // Lock pixels for writing
+    void* bitmapPixels;
+    if (AndroidBitmap_lockPixels(env, javaBitmap, &bitmapPixels) < 0) {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "Failed to lock Bitmap pixels");
+        // Note: In case of failure, javaBitmap might need to be recycled on Java side if it was created.
+        // However, if lockPixels fails, it's safer to return null and let Java handle it.
+        env->DeleteLocalRef(bitmapCls);
+        env->DeleteLocalRef(bitmapConfigCls);
+        env->DeleteLocalRef(argb8888Config);
+        // javaBitmap is not deleted here as it might be a valid object that simply couldn't be locked.
+        // However, without pixels, it's not useful. Better to ensure it's cleaned up if we return null.
+        // For simplicity now, we'll assume if lockPixels fails, the bitmap isn't fully usable.
+        return nullptr;
+    }
+
+    cv::Mat mat_rgba;
+    if (src.channels() == 3) { // RGB
+        cv::cvtColor(src, mat_rgba, cv::COLOR_RGB2RGBA);
+    } else if (src.channels() == 4) { // Assuming RGBA already
+        mat_rgba = src;
+    } else {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "Unsupported Mat channels for bitmap: %d", src.channels());
+        AndroidBitmap_unlockPixels(env, javaBitmap);
+        env->DeleteLocalRef(bitmapCls);
+        env->DeleteLocalRef(bitmapConfigCls);
+        env->DeleteLocalRef(argb8888Config);
+        // Consider deleting/recycling javaBitmap if returning null
+        return nullptr;
+    }
+
+    // Copy data. Android ARGB_8888 expects RGBA byte order in memory.
+    memcpy(bitmapPixels, mat_rgba.data, mat_rgba.total() * mat_rgba.elemSize());
+
+    // Unlock pixels
+    AndroidBitmap_unlockPixels(env, javaBitmap);
+
+    // Clean up local JNI references
+    env->DeleteLocalRef(bitmapCls);
+    env->DeleteLocalRef(bitmapConfigCls);
+    env->DeleteLocalRef(argb8888Config);
+
+    return javaBitmap;
+}
+
 
 extern "C" {
 
@@ -166,6 +267,11 @@ JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved)
         delete g_yolov8;
         g_yolov8 = 0;
     }
+    {
+        ncnn::MutexLockGuard g(g_latest_frame_lock);
+        g_latest_frame_for_bitmap.release();
+    }
+
 
     ncnn::destroy_gpu_instance();
 
@@ -186,27 +292,27 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
     __android_log_print(ANDROID_LOG_DEBUG, "ncnn", "loadModel %p", mgr);
 
     const char* tasknames[6] =
-    {
-        "",
-        "_oiv7",
-        "_seg",
-        "_pose",
-        "_cls",
-        "_obb"
-    };
+            {
+                    "",
+                    "_oiv7",
+                    "_seg",
+                    "_pose",
+                    "_cls",
+                    "_obb"
+            };
 
     const char* modeltypes[9] =
-    {
-        "n",
-        "s",
-        "m",
-        "n",
-        "s",
-        "m",
-        "n",
-        "s",
-        "m"
-    };
+            {
+                    "n",
+                    "s",
+                    "m",
+                    "n",
+                    "s",
+                    "m",
+                    "n",
+                    "s",
+                    "m"
+            };
 
     std::string parampath = std::string("yolov8") + modeltypes[(int)modelid] + tasknames[(int)taskid] + ".ncnn.param";
     std::string modelpath = std::string("yolov8") + modeltypes[(int)modelid] + tasknames[(int)taskid] + ".ncnn.bin";
@@ -298,6 +404,26 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_setOutputWindo
     g_camera->set_window(win);
 
     return JNI_TRUE;
+}
+
+JNIEXPORT jobject JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_getCurrentFrame(JNIEnv* env, jobject thiz)
+{
+    cv::Mat frame_copy;
+    {
+        ncnn::MutexLockGuard lock(g_latest_frame_lock);
+        if (g_latest_frame_for_bitmap.empty()) {
+            __android_log_print(ANDROID_LOG_DEBUG, "ncnn", "getCurrentFrame: No frame available yet.");
+            return nullptr;
+        }
+        frame_copy = g_latest_frame_for_bitmap.clone();
+    }
+
+    if (frame_copy.empty()) {
+        __android_log_print(ANDROID_LOG_ERROR, "ncnn", "getCurrentFrame: Frame copy is empty after lock.");
+        return nullptr;
+    }
+
+    return matToBitmap(env, frame_copy);
 }
 
 }
