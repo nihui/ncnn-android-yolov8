@@ -41,7 +41,9 @@ jobs:
 
     - name: build-apk
       run: |
+        export ANDROID_NDK=$ANDROID_NDK_LATEST_HOME
         export ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME
+        export ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME
         bash ./gradlew assembleRelease --stacktrace
 
     - name: sign-apk
