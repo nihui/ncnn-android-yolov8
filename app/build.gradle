@@ -5,6 +5,7 @@ plugins {
 android {
     namespace 'com.tencent.yolov8ncnn'
     compileSdk 33
+    ndkVersion "29.0.14206865" 
 
     defaultConfig {
         applicationId "com.tencent.yolov8ncnn"
