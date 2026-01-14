@@ -12,6 +12,7 @@ android {
         archivesBaseName = "$applicationId"
 
         minSdk 24
+        targetSdkVersion 35
 
         externalNativeBuild {
             cmake {
