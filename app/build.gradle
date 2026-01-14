@@ -11,7 +11,7 @@ android {
         applicationId "com.tencent.yolov8ncnn"
         archivesBaseName = "$applicationId"
 
-        minSdk 24
+        minSdkVersion 24
         targetSdkVersion 35
 
         externalNativeBuild {
