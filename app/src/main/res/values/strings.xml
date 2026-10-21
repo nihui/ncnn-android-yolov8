@@ -24,5 +24,6 @@
         <item>CPU</item>
         <item>GPU</item>
         <item>turnip</item>
+        <item>momoten</item>
     </string-array>
 </resources>
