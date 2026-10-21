@@ -41,7 +41,7 @@ https://github.com/nihui/mesa-turnip-android-driver
 https://github.com/nihui/momoten/releases/tag/20261021
 
 * Download `momoten-20261021-android-<target>.zip` for `arm64-v8a-api21`, `armeabi-v7a-api14`, `x86-api14` and `x86_64-api21`
-* Extract `lib/libmomoten.so` into **app/src/main/jniLibs/<abi>** for each corresponding ABI (create directories if needed)
+* Extract `lib/libmomoten.so` into `app/src/main/jniLibs/<abi>` for each corresponding ABI (create directories if needed)
 * Select **momoten** in the CPU/GPU selector; a usable vendor OpenCL driver is required
 
 ### step5
