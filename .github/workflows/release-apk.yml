@@ -6,6 +6,7 @@ env:
   OPENCV_VERSION: 4.14.0
   OPENCV_MOBILE_TAG: v37
   MESA_TURNIP_VERSION: 26.2.5
+  MOMOTEN_VERSION: 20261021
   BUILD_TOOLS_VERSION: 36.0.0
 
 jobs:
@@ -33,6 +34,18 @@ jobs:
         wget -q https://github.com/nihui/mesa-turnip-android-driver/releases/download/${MESA_TURNIP_VERSION}/mesa-turnip-android-${MESA_TURNIP_VERSION}.zip
         mkdir -p app/src/main/jniLibs/arm64-v8a
         unzip -q mesa-turnip-android-${MESA_TURNIP_VERSION}.zip -d app/src/main/jniLibs/arm64-v8a
+
+    - name: vulkan-momoten-driver
+      run: |
+        for target in arm64-v8a-api21 armeabi-v7a-api14 x86-api14 x86_64-api21; do
+          abi=${target%-api*}
+          archive="momoten-${MOMOTEN_VERSION}-android-${target}.zip"
+          wget -q "https://github.com/nihui/momoten/releases/download/${MOMOTEN_VERSION}/${archive}"
+          mkdir -p "app/src/main/jniLibs/${abi}"
+          unzip -q -j "$archive" lib/libmomoten.so -d "app/src/main/jniLibs/${abi}"
+        done
+        mkdir -p app/src/main/resources/META-INF/momoten
+        unzip -q "$archive" LICENSE.txt THIRD_PARTY_NOTICES.md -d app/src/main/resources/META-INF/momoten
 
     - name: modify-jni-cmakelists
       run: |

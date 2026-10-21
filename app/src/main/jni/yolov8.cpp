@@ -29,10 +29,11 @@ int YOLOv8::load(const char* parampath, const char* modelpath, bool use_gpu)
     yolov8.opt.use_vulkan_compute = use_gpu;
 #endif
 
-    yolov8.load_param(parampath);
-    yolov8.load_model(modelpath);
+    int ret = yolov8.load_param(parampath);
+    if (ret != 0)
+        return ret;
 
-    return 0;
+    return yolov8.load_model(modelpath);
 }
 
 int YOLOv8::load(AAssetManager* mgr, const char* parampath, const char* modelpath, bool use_gpu)
@@ -45,10 +46,11 @@ int YOLOv8::load(AAssetManager* mgr, const char* parampath, const char* modelpat
     yolov8.opt.use_vulkan_compute = use_gpu;
 #endif
 
-    yolov8.load_param(mgr, parampath);
-    yolov8.load_model(mgr, modelpath);
+    int ret = yolov8.load_param(mgr, parampath);
+    if (ret != 0)
+        return ret;
 
-    return 0;
+    return yolov8.load_model(mgr, modelpath);
 }
 
 void YOLOv8::set_det_target_size(int target_size)

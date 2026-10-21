@@ -20,11 +20,13 @@
 
 #include <jni.h>
 
+#include <string.h>
 #include <string>
 #include <vector>
 
 #include <platform.h>
 #include <benchmark.h>
+#include <gpu.h>
 
 #include "yolov8.h"
 
@@ -176,7 +178,7 @@ JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved)
 // public native boolean loadModel(AssetManager mgr, int taskid, int modelid, int cpugpu);
 JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIEnv* env, jobject thiz, jobject assetManager, jint taskid, jint modelid, jint cpugpu)
 {
-    if (taskid < 0 || taskid > 5 || modelid < 0 || modelid > 8 || cpugpu < 0 || cpugpu > 2)
+    if (taskid < 0 || taskid > 5 || modelid < 0 || modelid > 8 || cpugpu < 0 || cpugpu > 3)
     {
         return JNI_FALSE;
     }
@@ -210,8 +212,9 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
 
     std::string parampath = std::string("yolov8") + modeltypes[(int)modelid] + tasknames[(int)taskid] + ".ncnn.param";
     std::string modelpath = std::string("yolov8") + modeltypes[(int)modelid] + tasknames[(int)taskid] + ".ncnn.bin";
-    bool use_gpu = (int)cpugpu == 1;
+    bool use_gpu = (int)cpugpu != 0;
     bool use_turnip = (int)cpugpu == 2;
+    bool use_momoten = (int)cpugpu == 3;
 
     // reload
     {
@@ -220,26 +223,39 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
         {
             static int old_taskid = 0;
             static int old_modelid = 0;
-            static int old_cpugpu = 0;
+            static int old_cpugpu = -1;
             if (taskid != old_taskid || (modelid % 3) != old_modelid || cpugpu != old_cpugpu)
             {
                 // taskid or model or cpugpu changed
                 delete g_yolov8;
                 g_yolov8 = 0;
             }
-            old_taskid = taskid;
-            old_modelid = modelid % 3;
-            old_cpugpu = cpugpu;
-
-            ncnn::destroy_gpu_instance();
-
-            if (use_turnip)
+            if (cpugpu != old_cpugpu)
             {
-                ncnn::create_gpu_instance("libvulkan_freedreno.so");
-            }
-            else if (use_gpu)
-            {
-                ncnn::create_gpu_instance();
+                // The old Net must be destroyed before switching drivers.
+                ncnn::destroy_gpu_instance();
+                old_cpugpu = -1;
+
+                if (use_gpu)
+                {
+                    const char* driver_path = use_turnip ? "libvulkan_freedreno.so" : use_momoten ? "libmomoten.so" : 0;
+                    if (ncnn::create_gpu_instance(driver_path) != 0)
+                    {
+                        ncnn::destroy_gpu_instance();
+                        return JNI_FALSE;
+                    }
+
+                    ncnn::VulkanDevice* vkdev = ncnn::get_gpu_device();
+                    if (!vkdev || !vkdev->is_valid()
+                        || (use_turnip && vkdev->info.driver_id() != VK_DRIVER_ID_MESA_TURNIP)
+                        || (use_momoten && strcmp(vkdev->info.driver_name(), "momoten") != 0 && strncmp(vkdev->info.device_name(), "momoten: ", 9) != 0))
+                    {
+                        // simplevk may fall back to another driver.
+                        ncnn::destroy_gpu_instance();
+                        return JNI_FALSE;
+                    }
+                }
+                old_cpugpu = cpugpu;
             }
 
             if (!g_yolov8)
@@ -251,8 +267,15 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
                 if (taskid == 4) g_yolov8 = new YOLOv8_cls;
                 if (taskid == 5) g_yolov8 = new YOLOv8_obb;
 
-                g_yolov8->load(mgr, parampath.c_str(), modelpath.c_str(), use_gpu || use_turnip);
+                if (g_yolov8->load(mgr, parampath.c_str(), modelpath.c_str(), use_gpu) != 0)
+                {
+                    delete g_yolov8;
+                    g_yolov8 = 0;
+                    return JNI_FALSE;
+                }
             }
+            old_taskid = taskid;
+            old_modelid = modelid % 3;
             int target_size = 320;
             if ((int)modelid >= 3)
                 target_size = 480;
