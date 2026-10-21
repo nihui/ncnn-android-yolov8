@@ -28,7 +28,6 @@ import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.Spinner;
-import android.widget.Toast;
 
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
@@ -141,7 +140,6 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback
         if (!ret_init)
         {
             Log.e("MainActivity", "yolov8ncnn loadModel failed");
-            Toast.makeText(this, "Cannot load model with " + spinnerCPUGPU.getSelectedItem(), Toast.LENGTH_LONG).show();
         }
     }
 

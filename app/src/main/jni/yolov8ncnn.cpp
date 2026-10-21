@@ -212,7 +212,7 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
 
     std::string parampath = std::string("yolov8") + modeltypes[(int)modelid] + tasknames[(int)taskid] + ".ncnn.param";
     std::string modelpath = std::string("yolov8") + modeltypes[(int)modelid] + tasknames[(int)taskid] + ".ncnn.bin";
-    bool use_gpu = (int)cpugpu != 0;
+    bool use_gpu = (int)cpugpu == 1;
     bool use_turnip = (int)cpugpu == 2;
     bool use_momoten = (int)cpugpu == 3;
 
@@ -230,16 +230,18 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
                 delete g_yolov8;
                 g_yolov8 = 0;
             }
+            old_taskid = taskid;
+            old_modelid = modelid % 3;
+
             if (cpugpu != old_cpugpu)
             {
                 // The old Net must be destroyed before switching drivers.
                 ncnn::destroy_gpu_instance();
                 old_cpugpu = -1;
 
-                if (use_gpu)
+                if (use_momoten)
                 {
-                    const char* driver_path = use_turnip ? "libvulkan_freedreno.so" : use_momoten ? "libmomoten.so" : 0;
-                    if (ncnn::create_gpu_instance(driver_path) != 0)
+                    if (ncnn::create_gpu_instance("libmomoten.so") != 0)
                     {
                         ncnn::destroy_gpu_instance();
                         return JNI_FALSE;
@@ -247,13 +249,20 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
 
                     ncnn::VulkanDevice* vkdev = ncnn::get_gpu_device();
                     if (!vkdev || !vkdev->is_valid()
-                        || (use_turnip && vkdev->info.driver_id() != VK_DRIVER_ID_MESA_TURNIP)
-                        || (use_momoten && strcmp(vkdev->info.driver_name(), "momoten") != 0 && strncmp(vkdev->info.device_name(), "momoten: ", 9) != 0))
+                        || (strcmp(vkdev->info.driver_name(), "momoten") != 0 && strncmp(vkdev->info.device_name(), "momoten: ", 9) != 0))
                     {
                         // simplevk may fall back to another driver.
                         ncnn::destroy_gpu_instance();
                         return JNI_FALSE;
                     }
+                }
+                else if (use_turnip)
+                {
+                    ncnn::create_gpu_instance("libvulkan_freedreno.so");
+                }
+                else if (use_gpu)
+                {
+                    ncnn::create_gpu_instance();
                 }
                 old_cpugpu = cpugpu;
             }
@@ -267,15 +276,8 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov8ncnn_YOLOv8Ncnn_loadModel(JNIE
                 if (taskid == 4) g_yolov8 = new YOLOv8_cls;
                 if (taskid == 5) g_yolov8 = new YOLOv8_obb;
 
-                if (g_yolov8->load(mgr, parampath.c_str(), modelpath.c_str(), use_gpu) != 0)
-                {
-                    delete g_yolov8;
-                    g_yolov8 = 0;
-                    return JNI_FALSE;
-                }
+                g_yolov8->load(mgr, parampath.c_str(), modelpath.c_str(), use_gpu || use_turnip || use_momoten);
             }
-            old_taskid = taskid;
-            old_modelid = modelid % 3;
             int target_size = 320;
             if ((int)modelid >= 3)
                 target_size = 480;
